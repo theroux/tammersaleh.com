@@ -1,8 +1,14 @@
 ---
-title: CNA Patterns: Mockable Service Clients
+title: Cloud Native Patterns: Mockable Service Clients
 date: 2015-06-19 02:05 PDT
 description: Providing service clients with built-in mock modes empowers downstream teams.
 ---
 
+It's often the case in microservice architectures that teams view the boundary between services as the network protocol they use to talk to each other.  This often means that the [product surface area](/posts/mind-the-map/) is HTTP+JSON over the network.  This is nice from an architectural point of view, and works well in boxes-and-lines diagrams, but is often the wrong way for the various teams to interact.
 
+One of the challenges this imposes on downstream teams consuming a service is in producing standalone tests.  Cloud Native applications should always include acceptance tests that span a fully deployed network, but developers also need a larger suite of isolated unit and integration tests at the service level for fast feedback.
+
+In order to achieve that isolation, downstream teams end up having to mock out the upstream service in their tests -- usually by either (1) implementing mock clients that are injected as dependencies, (2) introducing an HTTP mocking library to do the same at the runtime level, or (3) building mock servers that run as sidecar processes alongside their tests.
+
+These techniques work, but as the number of downstream teams grow, this introduces an incredible amount of duplication and code complexity.  A pattern I've seen work well in other organisations, is to move the product surface area such that each team provides .
 
