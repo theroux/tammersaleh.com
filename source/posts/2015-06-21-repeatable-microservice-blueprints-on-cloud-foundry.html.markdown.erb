@@ -1,0 +1,161 @@
+---
+title: Repeatable Microservice Deployments using Git and Cloud Foundry
+date: 2015-06-21 03:41 PDT
+description: A technique for deploying and managing microservice architectures in a repeatable manner using Git submodules and Cloud Foundry.
+---
+
+### Problem
+
+How do the various teams know that their service works correctly within the pantheon of the entire microservice architecture?  How can they deploy with confidence without accidentally introducing backwards-incompatible API changes?  How does a developer know that all of the services deployed in her personal environment are up to date with respect to production?
+
+The root of the problem is that most teams lack two pieces of orchestration for their overall application:
+
+* A definitive statement of exactly which versions of all of the services have been tested against each other and are currently running in production.
+* A quick, easy and consistent way to deploy those services to an environment of their choosing.
+
+### Solution
+
+We can combine the simple and incredibly scriptable deployment experience from Cloud Foundry with the precise version tracking provided by git to solve this handily.  This solution combines two concepts:
+
+1. A master git repository, which we refer to as the blueprint.  This repository contains [git submodules](http://git-scm.com/book/en/v2/Git-Tools-Submodules) pointing at each of the services that make up your entire application.  The example repository can [be found here](https://github.com/cf-blueprint/example).
+1. A [`deploy_all`](https://github.com/cf-blueprint/example/blob/master/deploy_all) script, which deploys the various services in parallel.
+
+The `deploy_all` script relies on convention over configuration.  You pass in the name of the environment you're deploying to.  As a safeguard, it does not target or login to the environment for you.  It then finds all of the [Cloud Foundry manifest files](http://docs.cloudfoundry.org/devguide/deploy-apps/manifest.html) for the services that are named after that environment and uses them for the deployments.  If you run `deploy_all prod`, then it will deploy every service, using the `prod.yml` manifest in that services repo.  This allows you to configure different scaling parameters per environment (I need 1G of ram and 100 instances in prod, but only 256M and 2 instances to test with).
+
+### Setup
+
+First, let's prepare the blueprint repo.  For each of your microservice applications, add them as submodules.  
+
+```
+example $ git submodule add git@github.com:cf-blueprint/example-foo.git foo
+Cloning into 'foo'...
+remote: Counting objects: 3, done.
+remote: Compressing objects: 100% (2/2), done.
+remote: Total 3 (delta 0), reused 3 (delta 0), pack-reused 0
+Receiving objects: 100% (3/3), done.
+Checking connectivity... done.
+```
+
+```
+example $ git submodule add git@github.com:cf-blueprint/example-bar.git bar
+Cloning into 'bar'...
+remote: Counting objects: 3, done.
+remote: Compressing objects: 100% (2/2), done.
+remote: Total 3 (delta 0), reused 3 (delta 0), pack-reused 0
+Receiving objects: 100% (3/3), done.
+Checking connectivity... done.
+```
+
+```
+example $ git st
+## master...origin/master
+A  .gitmodules
+A  bar
+A  foo
+```
+
+```
+example $ git config --global diff.submodule log
+example $ git config --global status.submodulesummary 1
+example $ git add .
+example $ git commit -m "Added Foo and Bar applications"
+[master bff9c40] Added Foo and Bar applications
+ 3 files changed, 8 insertions(+)
+ create mode 100644 .gitmodules
+ create mode 160000 bar
+ create mode 160000 foo
+example $ git push
+Counting objects: 3, done.
+Delta compression using up to 4 threads.
+Compressing objects: 100% (3/3), done.
+Writing objects: 100% (3/3), 444 bytes | 0 bytes/s, done.
+Total 3 (delta 0), reused 0 (delta 0)
+To git@github.com:cf-blueprint/example.git
+   aceb4f0..bff9c40  -> master
+```
+
+### CI/CD Pipeline
+
+The benefits of this setup are really apparent when combined with a strong CI/CD pipeline.  Consider this automated workflow:
+1. Team A adds a feature to Foo
+1. CI tests Foo in isolation (unit and integration tests)
+1. If those tests pass, then the `foo` submodule is bumped in a branch of the blueprint repo.
+1. CI deploys that branch (via `deploy_all`) to a temporary staging environment.
+1. CI runs the acceptance and smoke tests for the entire microservice architecture against that staging environment.
+1. If those tests pass, then CI promotes the temporary branch to `master`
+1. CI optionally deploys `master` to production.
+
+In this way, developers have confidence that `master` in the blueprint repo _always_ points to the exact SHAs of the various services currently deployed to production.  She can trust that testing her changes locally using that blueprint will mimic production entirely.
+
+Setting up such a pipeline is fairly simple with a CI/CD tool like our [Concourse](http://concourse.ci/).
+
+```
+$ git clone --recursive cf-blueprint/example
+Cloning into 'example'...
+remote: Counting objects: 8, done.
+remote: Compressing objects: 100% (7/7), done.
+remote: Total 8 (delta 0), reused 8 (delta 0), pack-reused 0
+Receiving objects: 100% (8/8), done.
+Checking connectivity... done.
+Submodule 'bar' (git@github.com:cf-blueprint/example-bar.git) registered for path 'bar'
+Submodule 'foo' (git@github.com:cf-blueprint/example-foo.git) registered for path 'foo'
+Cloning into 'bar'...
+remote: Counting objects: 10, done.
+remote: Compressing objects: 100% (7/7), done.
+remote: Total 10 (delta 0), reused 10 (delta 0), pack-reused 0
+Receiving objects: 100% (10/10), done.
+Checking connectivity... done.
+Submodule path 'bar': checked out '19ee1267df5da6db53546438516a7c177b8679ac'
+Cloning into 'foo'...
+remote: Counting objects: 13, done.
+remote: Compressing objects: 100% (8/8), done.
+remote: Total 13 (delta 2), reused 13 (delta 2), pack-reused 0
+Receiving objects: 100% (13/13), done.
+Resolving deltas: 100% (2/2), done.
+Checking connectivity... done.
+Submodule path 'foo': checked out 'd89e6fe3486ccf72020015bc952aa4ee4c484930'
+```
+
+```
+example $ cf target
+
+API endpoint:   https://api.run.pivotal.io (API version: 2.28.0)
+User:           tsaleh@pivotal.io
+Org:            tammersaleh
+Space:          blueprint
+
+example $ cf apps
+Getting apps in org tammersaleh / space blueprint as tsaleh@pivotal.io...
+OK
+
+No apps found
+```
+
+```
+example $ git submodule update --remote foo
+Submodule path 'foo': checked out '74e752bdcd706075d2060c258b4d849ede4016fe'
+example $ git diff
+Submodule foo d89e6fe..74e752b:
+  > Foo talks to Bar
+```
+
+```
+example $ ./deploy_all prod.yml
+Deploying bar...
+Deploying foo...
+Deployment bar succeeded.
+Deployment foo succeeded.
+
+Getting apps in org tammersaleh / space blueprint as tsaleh@pivotal.io...
+OK
+
+name   requested state   instances   memory   disk   urls
+bar    started           2/2         128M     128M   tsaleh-bar.cfapps.io
+foo    started           2/2         128M     128M   tsaleh-foo.cfapps.io
+```
+
+```
+example $ curl http://tsaleh-foo.cfapps.io
+Hello from Foo!  Bar says: Hello from Bar!
+```
+
